@@ -9,10 +9,10 @@ GFF=$4
 
 echo "Running fastp for $SAMPLE"
 fastp \
-  -i "${FASTQ_DIR}/${SAMPLE}_1.fastq.gz" \
-  -I "${FASTQ_DIR}/${SAMPLE}_2.fastq.gz" \
-  -o "${SAMPLE}_1.cleaned.fastq.gz" \
-  -O "${SAMPLE}_2.cleaned.fastq.gz" \
+  -i "${FASTQ_DIR}/${SAMPLE}_1.fastq" \
+  -I "${FASTQ_DIR}/${SAMPLE}_2.fastq" \
+  -o "${SAMPLE}_1.cleaned.fastq" \
+  -O "${SAMPLE}_2.cleaned.fastq" \
   --detect_adapter_for_pe \
   --thread 16 \
   --html "${SAMPLE}_fastp.html" \
@@ -20,8 +20,8 @@ fastp \
 
 echo "Aligning $SAMPLE with Bowtie2"
 bowtie2 -x "$INDEX" \
-  -1 "${SAMPLE}_1.cleaned.fastq.gz" \
-  -2 "${SAMPLE}_2.cleaned.fastq.gz" | \
+  -1 "${SAMPLE}_1.cleaned.fastq" \
+  -2 "${SAMPLE}_2.cleaned.fastq" | \
   samtools view -bS -F 4 - | samtools sort -o "${SAMPLE}.sorted.bam"
 
 samtools index "${SAMPLE}.sorted.bam"

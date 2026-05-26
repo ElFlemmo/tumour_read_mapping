@@ -14,11 +14,15 @@ GFF=$3
 INDEX_PREFIX=$(basename "${FASTA%.*}")
 SCRIPT_DIR=$(dirname "$0")
 
-echo "Building Bowtie2 index from $FASTA"
-bowtie2-build "$FASTA" "$INDEX_PREFIX"
+if [[ ! -f "${INDEX_PREFIX}.1.bt2" ]]; then
+    echo "Building Bowtie2 index from $FASTA"
+    bowtie2-build "$FASTA" "$INDEX_PREFIX"
+else
+    echo "Bowtie2 index already exists, skipping build"
+fi
 
-for R1 in "$FASTQ_DIR"/*_1.fastq.gz; do
-    SAMPLE=$(basename "$R1" _1.fastq.gz)
+for R1 in "$FASTQ_DIR"/*_1.fastq; do
+    SAMPLE=$(basename "$R1" _1.fastq)
     bash "${SCRIPT_DIR}/read_mapping.sh" "$SAMPLE" "$FASTQ_DIR" "$INDEX_PREFIX" "$GFF"
 done
 
