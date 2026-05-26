@@ -9,4 +9,5 @@ git pull
 conda activate mapping
 
 cd /data/Flemming/tumour
-bash /data/Flemming/git/tumour_read_mapping/run_all.sh /data/Flemming/tumour combined_revised_phages.fasta combined_revised_phages.gff3
+nohup bash /data/Flemming/git/tumour_read_mapping/run_all.sh /data/Flemming/tumour combined_revised_phages.fasta combined_revised_phages.gff3 > pipeline.log 2>&1 &
+tail -f pipeline.log
