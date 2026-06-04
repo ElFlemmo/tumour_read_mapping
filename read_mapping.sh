@@ -47,7 +47,7 @@ else
       -2 "${SAMPLE}_2.cleaned.fastq" | \
       samtools view -@ 48 -bS -F 4 - | samtools sort -@ 48 -o "${SAMPLE}.sorted.bam"
     samtools index "${SAMPLE}.sorted.bam"
-    rm -f "${SAMPLE}_1.cleaned.fastq" "${SAMPLE}_2.cleaned.fastq"
+    #rm -f "${SAMPLE}_1.cleaned.fastq" "${SAMPLE}_2.cleaned.fastq"
 fi
 
 echo "Counting reads for $SAMPLE"
