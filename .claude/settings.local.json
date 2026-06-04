@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "PowerShell(Get-ChildItem -Path \"E:\\\\EGA\" -Recurse -File | Where-Object {$_.Extension -in @\\('.json', '.yaml', '.yml', '.txt', '.md', '.cfg', '.conf'\\)} | Select-Object FullName)"
+      "PowerShell(Get-ChildItem -Path \"E:\\\\EGA\" -Recurse -File | Where-Object {$_.Extension -in @\\('.json', '.yaml', '.yml', '.txt', '.md', '.cfg', '.conf'\\)} | Select-Object FullName)",
+      "PowerShell(conda env list 2>&1)",
+      "PowerShell(conda run -n base Rscript --version 2>&1)"
     ]
   }
 }

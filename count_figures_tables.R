@@ -188,3 +188,449 @@ ggplot(ode_long, aes(x = host_phenotype, y = count + 1, fill = host_phenotype)) 
   )
 
 ggsave("F:/CRC_Tumour_WGS/ODE_phages_boxplots.pdf", width = 10, height = 8)
+
+# ── CDS-level read counts along genome ────────────────────────────────────────
+
+read_counts_cds <- function(f) {
+  df <- read.table(f, header = TRUE, skip = 1, sep = "\t")
+  data.frame(
+    gene_id = df$Geneid,
+    phage   = df$Chr,
+    start   = df$Start,
+    end     = df$End,
+    count   = df[[ncol(df)]],
+    Run     = sub("\\.cds\\.counts\\.txt$", "", basename(f))
+  )
+}
+
+cds_long <- do.call(rbind, lapply(files, read_counts_cds))
+cds_long <- cds_long[cds_long$Run %in% meta$Run, ]
+
+sf <- sizeFactors(dds)
+cds_long$norm_count <- cds_long$count / sf[cds_long$Run]
+cds_long$phage_name <- name_map[cds_long$phage]
+cds_long$mid        <- (cds_long$start + cds_long$end) / 2
+cds_long <- merge(cds_long, meta[, c("Run", "host_phenotype")], by = "Run")
+cds_long <- cds_long[order(cds_long$phage_name, cds_long$Run, cds_long$mid), ]
+
+# ── ODE phages: reads per CDS along genome ────────────────────────────────────
+
+ode_cds <- cds_long[grepl("_ODE", cds_long$phage_name), ]
+ode_cds$short_name <- sub("Bacteroides_phage_", "", ode_cds$phage_name)
+n_ode <- length(unique(ode_cds$short_name))
+
+ggplot(ode_cds, aes(x = mid, y = norm_count + 1, colour = host_phenotype, group = Run)) +
+  geom_line(alpha = 0.4, linewidth = 0.4) +
+  geom_point(alpha = 0.7, size = 1.2) +
+  facet_wrap(~ short_name, scales = "free", ncol = 1) +
+  scale_y_log10() +
+  scale_colour_manual(values = c("healthy" = "steelblue", "cancer" = "firebrick")) +
+  theme_bw() +
+  labs(
+    title = "Read counts per CDS along genome — ODE phages",
+    x = "Genomic position (bp)", y = "Normalised count (log10 + 1)", colour = NULL
+  )
+
+ggsave("F:/CRC_Tumour_WGS/ODE_phages_genome_coverage.pdf", width = 10, height = 4 * n_ode)
+
+# ── FU phages: reads per CDS along genome ─────────────────────────────────────
+
+fu_cds <- cds_long[grepl("_FU", cds_long$phage_name), ]
+fu_cds$short_name <- sub("Bacteroides_phage_", "", fu_cds$phage_name)
+n_fu <- length(unique(fu_cds$short_name))
+
+ggplot(fu_cds, aes(x = mid, y = norm_count + 1, colour = host_phenotype, group = Run)) +
+  geom_line(alpha = 0.4, linewidth = 0.4) +
+  geom_point(alpha = 0.7, size = 1.2) +
+  facet_wrap(~ short_name, scales = "free", ncol = 1) +
+  scale_y_log10() +
+  scale_colour_manual(values = c("healthy" = "steelblue", "cancer" = "firebrick")) +
+  theme_bw() +
+  labs(
+    title = "Read counts per CDS along genome — FU phages",
+    x = "Genomic position (bp)", y = "Normalised count (log10 + 1)", colour = NULL
+  )
+
+ggsave("F:/CRC_Tumour_WGS/FU_phages_genome_coverage.pdf", width = 10, height = 4 * n_fu)
+
+# ── Phage prevalence barplots (cumulative: ≥N genes with ≥1 read) ──────────────
+
+gene_presence <- cds_long |>
+  dplyr::group_by(phage_name, Run, host_phenotype) |>
+  dplyr::summarise(n_genes_detected = sum(count > 0), .groups = "drop")
+
+n_cancer  <- sum(meta$host_phenotype == "cancer")
+n_healthy <- sum(meta$host_phenotype == "healthy")
+
+thresholds <- 1:12
+
+# All phage × phenotype × threshold combinations, defaulting to 0
+all_combos <- expand.grid(
+  phage_name     = unique(gene_presence$phage_name),
+  host_phenotype = c("cancer", "healthy"),
+  threshold      = thresholds,
+  stringsAsFactors = FALSE
+)
+
+prevalence_cum <- do.call(rbind, lapply(thresholds, function(thr) {
+  gene_presence |>
+    dplyr::filter(n_genes_detected >= thr) |>
+    dplyr::group_by(phage_name, host_phenotype) |>
+    dplyr::summarise(n_positive = dplyr::n(), .groups = "drop") |>
+    dplyr::mutate(threshold = thr)
+}))
+
+prevalence_cum <- merge(all_combos, prevalence_cum,
+                        by = c("phage_name", "host_phenotype", "threshold"),
+                        all.x = TRUE)
+prevalence_cum$n_positive[is.na(prevalence_cum$n_positive)] <- 0L
+prevalence_cum$threshold <- factor(prevalence_cum$threshold, levels = as.character(thresholds))
+prevalence_cum$group     <- sapply(prevalence_cum$phage_name, assign_group)
+prevalence_cum$short_name <- sub("Bacteroides_cryptic_phage_", "", prevalence_cum$phage_name)
+prevalence_cum$short_name <- sub("Bacteroides_phage_",         "", prevalence_cum$short_name)
+
+# Order panels by group then cancer count at threshold 8 (descending)
+order_at_8 <- prevalence_cum[prevalence_cum$threshold == "8" &
+                               prevalence_cum$host_phenotype == "cancer", ]
+order_at_8 <- order_at_8[order(order_at_8$group, -order_at_8$n_positive), ]
+prevalence_cum$short_name <- factor(prevalence_cum$short_name,
+                                    levels = unique(order_at_8$short_name))
+
+n_phages <- length(unique(prevalence_cum$short_name))
+
+ggplot(prevalence_cum, aes(x = threshold, y = n_positive, fill = host_phenotype)) +
+  geom_col(position = "dodge", width = 0.7) +
+  facet_wrap(~ short_name, ncol = 4, scales = "free_y") +
+  scale_fill_manual(
+    values = c("healthy" = "steelblue", "cancer" = "firebrick"),
+    labels = c(
+      "healthy" = paste0("Healthy (n=", n_healthy, ")"),
+      "cancer"  = paste0("Cancer (n=",  n_cancer,  ")")
+    )
+  ) +
+  scale_x_discrete(drop = FALSE) +
+  scale_y_continuous(breaks = scales::breaks_pretty()) +
+  theme_bw() +
+  theme(strip.text = element_text(size = 9)) +
+  labs(
+    title    = "Phage prevalence by sample type",
+    subtitle = "Each bar = samples with ≥N genes having at least 1 mapped read",
+    x = "Minimum genes detected (N)", y = "Number of positive samples", fill = NULL
+  )
+
+ggsave("F:/CRC_Tumour_WGS/phage_prevalence_barplots.pdf",
+       width = 14, height = ceiling(n_phages / 4) * 3)
+
+# ── ODE phages: distribution of genes-detected per sample ─────────────────────
+
+ode_per_sample <- cds_long[grepl("_ODE", cds_long$phage_name), ] |>
+  dplyr::group_by(phage_name, Run, host_phenotype) |>
+  dplyr::summarise(n_genes_detected = sum(count > 0), .groups = "drop")
+
+ode_pooled_per_sample <- cds_long[grepl("_ODE", cds_long$phage_name), ] |>
+  dplyr::group_by(Run, host_phenotype) |>
+  dplyr::summarise(n_genes_detected = sum(count > 0), .groups = "drop") |>
+  dplyr::mutate(phage_name = "All ODE phages (pooled)")
+
+ode_all_combos <- expand.grid(
+  phage_name     = c(unique(ode_per_sample$phage_name), "All ODE phages (pooled)"),
+  host_phenotype = c("cancer", "healthy"),
+  threshold      = thresholds,
+  stringsAsFactors = FALSE
+)
+
+ode_dist <- do.call(rbind, lapply(thresholds, function(thr) {
+  rbind(
+    ode_per_sample |>
+      dplyr::filter(n_genes_detected >= thr) |>
+      dplyr::group_by(phage_name, host_phenotype) |>
+      dplyr::summarise(n_samples = dplyr::n(), .groups = "drop") |>
+      dplyr::mutate(threshold = thr),
+    ode_pooled_per_sample |>
+      dplyr::filter(n_genes_detected >= thr) |>
+      dplyr::group_by(phage_name, host_phenotype) |>
+      dplyr::summarise(n_samples = dplyr::n(), .groups = "drop") |>
+      dplyr::mutate(threshold = thr)
+  )
+}))
+
+ode_dist <- merge(ode_all_combos, ode_dist,
+                  by = c("phage_name", "host_phenotype", "threshold"),
+                  all.x = TRUE)
+ode_dist$n_samples[is.na(ode_dist$n_samples)] <- 0L
+ode_dist$threshold <- factor(ode_dist$threshold, levels = as.character(thresholds))
+
+ode_dist$short_name <- sub("Bacteroides_phage_", "", ode_dist$phage_name)
+ode_dist$short_name <- factor(ode_dist$short_name,
+                               levels = c("All ODE phages (pooled)",
+                                          setdiff(unique(ode_dist$short_name),
+                                                  "All ODE phages (pooled)")))
+
+n_ode_phages <- length(unique(ode_dist$short_name))
+
+ggplot(ode_dist, aes(x = threshold, y = n_samples, fill = host_phenotype)) +
+  geom_col(position = "dodge", width = 0.7) +
+  facet_wrap(~ short_name, ncol = 1) +
+  scale_fill_manual(
+    values = c("healthy" = "steelblue", "cancer" = "firebrick"),
+    labels = c(
+      "healthy" = paste0("Healthy (n=", n_healthy, ")"),
+      "cancer"  = paste0("Cancer (n=",  n_cancer,  ")")
+    )
+  ) +
+  scale_x_discrete(drop = FALSE) +
+  scale_y_continuous(breaks = scales::breaks_pretty()) +
+  theme_bw() +
+  theme(strip.text = element_text(size = 10)) +
+  labs(
+    title    = "ODE phages — gene detection distribution per sample",
+    subtitle = "Each bar = samples with ≥N genes having at least 1 mapped read",
+    x = "Minimum genes detected (N)", y = "Number of samples", fill = NULL
+  )
+
+ggsave("F:/CRC_Tumour_WGS/ODE_phages_gene_detection_distribution.pdf",
+       width = 8, height = 4 * n_ode_phages)
+
+# ── ODE phages: line plot ──────────────────────────────────────────────────────
+
+ode_lines <- ode_dist[as.character(ode_dist$short_name) != "All ODE phages (pooled)", ]
+ode_lines <- droplevels(ode_lines)
+ode_lines$threshold_num <- as.integer(as.character(ode_lines$threshold))
+
+ggplot(ode_lines, aes(x = threshold_num, y = n_samples,
+                       color = host_phenotype, shape = short_name,
+                       group = interaction(short_name, host_phenotype))) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 3) +
+  scale_x_continuous(breaks = 1:12) +
+  scale_y_continuous(breaks = scales::breaks_pretty()) +
+  scale_color_manual(values = c("cancer"  = "firebrick", "healthy" = "steelblue"),
+                     labels = c("cancer"  = paste0("CRC (n=",  n_cancer,  ")"),
+                                "healthy" = paste0("CTR (n=", n_healthy, ")"))) +
+  scale_shape_manual(values = setNames(seq_along(levels(ode_lines$short_name)),
+                                       levels(ode_lines$short_name))) +
+  theme_bw() +
+  labs(
+    title    = "ODE phages — gene detection distribution",
+    subtitle = "Each line = samples with ≥N genes having at least 1 mapped read",
+    x = "Minimum genes detected (N)", y = "Number of samples",
+    color = NULL, shape = "Phage"
+  )
+
+ggsave("F:/CRC_Tumour_WGS/ODE_phages_gene_detection_lines.pdf", width = 8, height = 5)
+
+# ── FU phages: distribution of genes-detected per sample ──────────────────────
+
+fu_per_sample <- cds_long[grepl("_FU", cds_long$phage_name), ] |>
+  dplyr::group_by(phage_name, Run, host_phenotype) |>
+  dplyr::summarise(n_genes_detected = sum(count > 0), .groups = "drop")
+
+fu_pooled_per_sample <- cds_long[grepl("_FU", cds_long$phage_name), ] |>
+  dplyr::group_by(Run, host_phenotype) |>
+  dplyr::summarise(n_genes_detected = sum(count > 0), .groups = "drop") |>
+  dplyr::mutate(phage_name = "All FU phages (pooled)")
+
+fu_all_combos <- expand.grid(
+  phage_name     = c(unique(fu_per_sample$phage_name), "All FU phages (pooled)"),
+  host_phenotype = c("cancer", "healthy"),
+  threshold      = thresholds,
+  stringsAsFactors = FALSE
+)
+
+fu_dist <- do.call(rbind, lapply(thresholds, function(thr) {
+  rbind(
+    fu_per_sample |>
+      dplyr::filter(n_genes_detected >= thr) |>
+      dplyr::group_by(phage_name, host_phenotype) |>
+      dplyr::summarise(n_samples = dplyr::n(), .groups = "drop") |>
+      dplyr::mutate(threshold = thr),
+    fu_pooled_per_sample |>
+      dplyr::filter(n_genes_detected >= thr) |>
+      dplyr::group_by(phage_name, host_phenotype) |>
+      dplyr::summarise(n_samples = dplyr::n(), .groups = "drop") |>
+      dplyr::mutate(threshold = thr)
+  )
+}))
+
+fu_dist <- merge(fu_all_combos, fu_dist,
+                 by = c("phage_name", "host_phenotype", "threshold"),
+                 all.x = TRUE)
+fu_dist$n_samples[is.na(fu_dist$n_samples)] <- 0L
+fu_dist$threshold <- factor(fu_dist$threshold, levels = as.character(thresholds))
+
+fu_dist$short_name <- sub("Bacteroides_phage_", "", fu_dist$phage_name)
+fu_dist$short_name <- factor(fu_dist$short_name,
+                              levels = c("All FU phages (pooled)",
+                                         setdiff(unique(fu_dist$short_name),
+                                                 "All FU phages (pooled)")))
+
+n_fu_phages <- length(unique(fu_dist$short_name))
+
+ggplot(fu_dist, aes(x = threshold, y = n_samples, fill = host_phenotype)) +
+  geom_col(position = "dodge", width = 0.7) +
+  facet_wrap(~ short_name, ncol = 1) +
+  scale_fill_manual(
+    values = c("healthy" = "steelblue", "cancer" = "firebrick"),
+    labels = c(
+      "healthy" = paste0("Healthy (n=", n_healthy, ")"),
+      "cancer"  = paste0("Cancer (n=",  n_cancer,  ")")
+    )
+  ) +
+  scale_x_discrete(drop = FALSE) +
+  scale_y_continuous(breaks = scales::breaks_pretty()) +
+  theme_bw() +
+  theme(strip.text = element_text(size = 10)) +
+  labs(
+    title    = "FU phages — gene detection distribution per sample",
+    subtitle = "Each bar = samples with ≥N genes having at least 1 mapped read",
+    x = "Minimum genes detected (N)", y = "Number of samples", fill = NULL
+  )
+
+ggsave("F:/CRC_Tumour_WGS/FU_phages_gene_detection_distribution.pdf",
+       width = 8, height = 4 * n_fu_phages)
+
+# ── FU phages: line plot ───────────────────────────────────────────────────────
+
+fu_lines <- fu_dist[as.character(fu_dist$short_name) != "All FU phages (pooled)", ]
+fu_lines <- droplevels(fu_lines)
+fu_lines$threshold_num <- as.integer(as.character(fu_lines$threshold))
+
+ggplot(fu_lines, aes(x = threshold_num, y = n_samples,
+                      color = host_phenotype, shape = short_name,
+                      group = interaction(short_name, host_phenotype))) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 3) +
+  scale_x_continuous(breaks = 1:12) +
+  scale_y_continuous(breaks = scales::breaks_pretty()) +
+  scale_color_manual(values = c("cancer"  = "firebrick", "healthy" = "steelblue"),
+                     labels = c("cancer"  = paste0("CRC (n=",  n_cancer,  ")"),
+                                "healthy" = paste0("CTR (n=", n_healthy, ")"))) +
+  scale_shape_manual(values = setNames(seq_along(levels(fu_lines$short_name)),
+                                       levels(fu_lines$short_name))) +
+  theme_bw() +
+  labs(
+    title    = "FU phages — gene detection distribution",
+    subtitle = "Each line = samples with ≥N genes having at least 1 mapped read",
+    x = "Minimum genes detected (N)", y = "Number of samples",
+    color = NULL, shape = "Phage"
+  )
+
+ggsave("F:/CRC_Tumour_WGS/FU_phages_gene_detection_lines.pdf", width = 8, height = 5)
+
+# ── Prevalence at ≥50% gene coverage per phage ────────────────────────────────
+
+total_genes <- cds_long |>
+  dplyr::group_by(phage_name) |>
+  dplyr::summarise(total_genes = dplyr::n_distinct(gene_id), .groups = "drop") |>
+  dplyr::mutate(threshold_50pct = ceiling(total_genes / 2))
+
+prev_50pct <- merge(gene_presence, total_genes, by = "phage_name") |>
+  dplyr::mutate(phage_positive = n_genes_detected >= threshold_50pct) |>
+  dplyr::group_by(phage_name, host_phenotype, total_genes, threshold_50pct) |>
+  dplyr::summarise(n_positive = sum(phage_positive), .groups = "drop")
+
+prev_50pct$group      <- sapply(prev_50pct$phage_name, assign_group)
+prev_50pct$short_name <- sub("Bacteroides_cryptic_phage_", "", prev_50pct$phage_name)
+prev_50pct$short_name <- sub("Bacteroides_phage_",         "", prev_50pct$short_name)
+prev_50pct$label      <- paste0(prev_50pct$short_name,
+                                 " (", prev_50pct$threshold_50pct, "/",
+                                 prev_50pct$total_genes, ")")
+
+cancer_order_50 <- prev_50pct[prev_50pct$host_phenotype == "cancer", ]
+cancer_order_50 <- cancer_order_50[order(cancer_order_50$group, -cancer_order_50$n_positive), ]
+prev_50pct$label <- factor(prev_50pct$label, levels = rev(unique(cancer_order_50$label)))
+
+ggplot(prev_50pct, aes(y = label, x = n_positive, fill = host_phenotype)) +
+  geom_col(position = "dodge", width = 0.7) +
+  facet_grid(group ~ ., scales = "free_y", space = "free_y") +
+  scale_fill_manual(
+    values = c("healthy" = "steelblue", "cancer" = "firebrick"),
+    labels = c(
+      "healthy" = paste0("Healthy (n=", n_healthy, ")"),
+      "cancer"  = paste0("Cancer (n=",  n_cancer,  ")")
+    )
+  ) +
+  scale_x_continuous(breaks = scales::breaks_pretty()) +
+  theme_bw() +
+  theme(strip.text = element_text(size = 10)) +
+  labs(
+    title    = "Phage prevalence at ≥50% gene coverage",
+    subtitle = "Positive = ≥ ceiling(total_genes / 2) genes with ≥1 mapped read; labels show threshold/total",
+    y = NULL, x = "Number of positive samples", fill = NULL
+  )
+
+ggsave("F:/CRC_Tumour_WGS/phage_prevalence_50pct_threshold.pdf", width = 11, height = 14)
+
+# ── All phages: gene detection line plot ───────────────────────────────────────
+# FU/ODE/TAA kept as group panels; cryptic phages and singletons get individual panels
+
+all_lines <- prevalence_cum
+all_lines$threshold_num <- as.integer(as.character(all_lines$threshold))
+
+group_panels <- c("FU phages", "ODE phages", "TAA phages")
+all_lines$facet_var <- ifelse(
+  all_lines$group %in% group_panels,
+  all_lines$group,
+  as.character(all_lines$short_name)
+)
+
+# Panel order: group panels first, then individual phages in existing factor order
+indiv_ordered <- levels(all_lines$short_name)[
+  levels(all_lines$short_name) %in%
+    unique(all_lines$facet_var[!all_lines$facet_var %in% group_panels])
+]
+all_lines$facet_var <- factor(all_lines$facet_var,
+                               levels = c(group_panels, indiv_ordered))
+
+# Shapes for phages within group panels (only needed there)
+group_phages <- unique(as.character(
+  all_lines$short_name[all_lines$facet_var %in% group_panels]
+))
+group_shape_vals <- setNames(seq_along(group_phages), group_phages)
+
+# End-of-line labels for group panels (one label per phage, cancer line only)
+line_labels <- all_lines[
+  all_lines$threshold_num == 12 &
+  all_lines$host_phenotype == "cancer" &
+  all_lines$facet_var %in% group_panels, ]
+
+n_panels <- nlevels(all_lines$facet_var)
+
+ggplot(all_lines, aes(x = threshold_num, y = n_positive,
+                       color = host_phenotype,
+                       group = interaction(short_name, host_phenotype))) +
+  geom_line(linewidth = 0.7) +
+  geom_point(
+    data = all_lines[all_lines$facet_var %in% group_panels, ],
+    aes(shape = short_name), size = 2.5
+  ) +
+  geom_point(
+    data = all_lines[!all_lines$facet_var %in% group_panels, ],
+    size = 2
+  ) +
+  ggrepel::geom_text_repel(
+    data    = line_labels,
+    aes(label = short_name),
+    color   = "black", size = 2.5, hjust = 0,
+    direction = "y", nudge_x = 0.3,
+    segment.size = 0.3, show.legend = FALSE
+  ) +
+  facet_wrap(~ facet_var, ncol = 4, scales = "free_y") +
+  scale_x_continuous(breaks = 1:12, expand = expansion(mult = c(0.05, 0.2))) +
+  scale_y_continuous(breaks = scales::breaks_pretty()) +
+  scale_color_manual(values = c("cancer"  = "firebrick", "healthy" = "steelblue"),
+                     labels = c("cancer"  = paste0("CRC (n=",  n_cancer,  ")"),
+                                "healthy" = paste0("CTR (n=", n_healthy, ")"))) +
+  scale_shape_manual(values = group_shape_vals, name = "Phage") +
+  theme_bw() +
+  theme(strip.text      = element_text(size = 8),
+        legend.position = "right") +
+  labs(
+    title    = "All phages — gene detection distribution",
+    subtitle = "Each line = samples with ≥N genes having at least 1 mapped read",
+    x = "Minimum genes detected (N)", y = "Number of positive samples",
+    color = NULL
+  )
+
+ggsave("F:/CRC_Tumour_WGS/all_phages_gene_detection_lines.pdf",
+       width = 16, height = ceiling(n_panels / 4) * 4)
