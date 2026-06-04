@@ -111,6 +111,7 @@ plot_long$group <- sapply(plot_long$phage, assign_group)
 # ── Main PDF: one boxplot per species group (counts summed within group) ───────
 
 group_long <- plot_long |>
+  dplyr::filter(group != "Cryptic phages") |>
   dplyr::group_by(Run, host_phenotype, group) |>
   dplyr::summarise(count = sum(count), .groups = "drop")
 
@@ -615,9 +616,9 @@ ggplot(all_lines, aes(x = threshold_num, y = n_positive,
     direction = "y", nudge_x = 0.3,
     segment.size = 0.3, show.legend = FALSE
   ) +
-  facet_wrap(~ facet_var, ncol = 4, scales = "free_y") +
+  facet_wrap(~ facet_var, ncol = 4) +
   scale_x_continuous(breaks = 1:12, expand = expansion(mult = c(0.05, 0.2))) +
-  scale_y_continuous(breaks = scales::breaks_pretty()) +
+  scale_y_continuous(limits = c(0, 10), breaks = 0:10) +
   scale_color_manual(values = c("cancer"  = "firebrick", "healthy" = "steelblue"),
                      labels = c("cancer"  = paste0("CRC (n=",  n_cancer,  ")"),
                                 "healthy" = paste0("CTR (n=", n_healthy, ")"))) +
@@ -634,3 +635,113 @@ ggplot(all_lines, aes(x = threshold_num, y = n_positive,
 
 ggsave("F:/CRC_Tumour_WGS/all_phages_gene_detection_lines.pdf",
        width = 16, height = ceiling(n_panels / 4) * 4)
+
+# ── All phages: gene detection line plot extended to 30 genes ─────────────────
+
+thresholds_30 <- 1:30
+
+all_combos_30 <- expand.grid(
+  phage_name     = unique(gene_presence$phage_name),
+  host_phenotype = c("cancer", "healthy"),
+  threshold      = thresholds_30,
+  stringsAsFactors = FALSE
+)
+
+prevalence_cum_30 <- do.call(rbind, lapply(thresholds_30, function(thr) {
+  gene_presence |>
+    dplyr::filter(n_genes_detected >= thr) |>
+    dplyr::group_by(phage_name, host_phenotype) |>
+    dplyr::summarise(n_positive = dplyr::n(), .groups = "drop") |>
+    dplyr::mutate(threshold = thr)
+}))
+
+prevalence_cum_30 <- merge(all_combos_30, prevalence_cum_30,
+                            by = c("phage_name", "host_phenotype", "threshold"),
+                            all.x = TRUE)
+prevalence_cum_30$n_positive[is.na(prevalence_cum_30$n_positive)] <- 0L
+prevalence_cum_30$threshold  <- factor(prevalence_cum_30$threshold,
+                                        levels = as.character(thresholds_30))
+prevalence_cum_30$group      <- sapply(prevalence_cum_30$phage_name, assign_group)
+prevalence_cum_30$short_name <- sub("Bacteroides_cryptic_phage_", "",
+                                     prevalence_cum_30$phage_name)
+prevalence_cum_30$short_name <- sub("Bacteroides_phage_", "",
+                                     prevalence_cum_30$short_name)
+
+# Reuse same panel ordering as the 1-12 plot (by group then cancer count at thr 8)
+prevalence_cum_30$short_name <- factor(prevalence_cum_30$short_name,
+                                        levels = levels(prevalence_cum$short_name))
+
+all_lines_30 <- prevalence_cum_30[prevalence_cum_30$group != "Cryptic phages", ]
+all_lines_30$threshold_num <- as.integer(as.character(all_lines_30$threshold))
+all_lines_30$facet_var <- ifelse(
+  all_lines_30$group %in% group_panels,
+  all_lines_30$group,
+  as.character(all_lines_30$short_name)
+)
+all_lines_30$facet_var <- factor(all_lines_30$facet_var,
+                                  levels = levels(all_lines$facet_var))
+
+line_labels_30 <- all_lines_30[
+  all_lines_30$threshold_num == 30 &
+  all_lines_30$host_phenotype == "cancer" &
+  all_lines_30$facet_var %in% group_panels, ]
+
+ggplot(all_lines_30, aes(x = threshold_num, y = n_positive,
+                          color = host_phenotype,
+                          group = interaction(short_name, host_phenotype))) +
+  geom_line(linewidth = 0.7) +
+  geom_point(
+    data = all_lines_30[all_lines_30$facet_var %in% group_panels, ],
+    aes(shape = short_name), size = 2.5
+  ) +
+  geom_point(
+    data = all_lines_30[!all_lines_30$facet_var %in% group_panels, ],
+    size = 2
+  ) +
+  ggrepel::geom_text_repel(
+    data      = line_labels_30,
+    aes(label = short_name),
+    color     = "black", size = 2.5, hjust = 0,
+    direction = "y", nudge_x = 0.5,
+    segment.size = 0.3, show.legend = FALSE
+  ) +
+  facet_wrap(~ facet_var, ncol = 4) +
+  scale_x_continuous(breaks = seq(0, 30, 5),
+                     expand = expansion(mult = c(0.05, 0.2))) +
+  scale_y_continuous(limits = c(0, 10), breaks = 0:10) +
+  scale_color_manual(values = c("cancer"  = "firebrick", "healthy" = "steelblue"),
+                     labels = c("cancer"  = paste0("CRC (n=",  n_cancer,  ")"),
+                                "healthy" = paste0("CTR (n=", n_healthy, ")"))) +
+  scale_shape_manual(values = group_shape_vals, name = "Phage") +
+  theme_bw() +
+  theme(strip.text      = element_text(size = 8),
+        legend.position = "right") +
+  labs(
+    title    = "All phages — gene detection distribution (up to 30 genes)",
+    subtitle = "Each line = samples with ≥N genes having at least 1 mapped read",
+    x = "Minimum genes detected (N)", y = "Number of positive samples",
+    color = NULL
+  )
+
+ggsave("F:/CRC_Tumour_WGS/all_phages_gene_detection_lines_30.pdf",
+       width = 16, height = ceiling(n_panels / 4) * 4)
+
+# ── Prevalence table (≥8 genes) exported to Excel ─────────────────────────────
+
+prev_table <- gene_presence |>
+  dplyr::mutate(positive = n_genes_detected >= 8) |>
+  dplyr::group_by(phage_name, host_phenotype) |>
+  dplyr::summarise(n_positive = sum(positive), .groups = "drop") |>
+  tidyr::pivot_wider(names_from = host_phenotype, values_from = n_positive,
+                     values_fill = 0) |>
+  dplyr::rename(n_CTR = healthy, n_CRC = cancer)
+
+prev_table$group      <- sapply(prev_table$phage_name, assign_group)
+prev_table$short_name <- sub("Bacteroides_cryptic_phage_", "", prev_table$phage_name)
+prev_table$short_name <- sub("Bacteroides_phage_",         "", prev_table$short_name)
+
+prev_table <- prev_table[order(prev_table$group, -prev_table$n_CRC), ]
+prev_table <- prev_table[, c("short_name", "phage_name", "group", "n_CRC", "n_CTR")]
+
+writexl::write_xlsx(prev_table,
+                    "F:/CRC_Tumour_WGS/phage_prevalence_8genes.xlsx")

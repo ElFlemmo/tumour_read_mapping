@@ -34,7 +34,15 @@ if [[ -f "${SAMPLE}.sorted.bam" ]]; then
     echo "Skipping alignment for $SAMPLE — sorted BAM already exists"
 else
     echo "Aligning $SAMPLE with Bowtie2"
-    bowtie2 -p 48 --all -x "$INDEX" \
+    # Original (default sensitivity):
+    # bowtie2 -p 48 --all -x "$INDEX" \
+    #   -1 "${SAMPLE}_1.cleaned.fastq" \
+    #   -2 "${SAMPLE}_2.cleaned.fastq" | \
+    # Less stringent for phage genetic heterogeneity:
+    bowtie2 -p 48 --all --very-sensitive \
+      -N 1 \
+      --score-min L,-1.0,-1.0 \
+      -x "$INDEX" \
       -1 "${SAMPLE}_1.cleaned.fastq" \
       -2 "${SAMPLE}_2.cleaned.fastq" | \
       samtools view -@ 48 -bS -F 4 - | samtools sort -@ 48 -o "${SAMPLE}.sorted.bam"
